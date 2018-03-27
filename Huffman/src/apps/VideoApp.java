@@ -7,10 +7,13 @@ import java.io.FileOutputStream;
 import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
+import java.util.HashMap;
 import java.util.Map;
 
 import models.Unsigned8BitModel;
 import codec.HuffmanEncoder;
+import codec.LwzDecoder;
+import codec.LwzEncoder;
 import codec.SymbolDecoder;
 import codec.SymbolEncoder;
 import models.Symbol;
@@ -26,49 +29,52 @@ import io.InputStreamBitSource;
 import io.OutputStreamBitSink;
 
 public class VideoApp {
+	
+	public static int dictSize = 256;
 
 	public static void main(String[] args) throws IOException, InsufficientBitsLeftException {
 		String base = "bunny";
-		String filename="/Users/kmp/tmp/" + base + ".450p.yuv";
+		String filename="/Users/alexj_000/tmp/" + base + ".450p.yuv";
 		File file = new File(filename);
 		int width = 800;
 		int height = 450;
 		int num_frames = 150;
-
-
-		Unsigned8BitModel model = new Unsigned8BitModel();
+		
+		
+		HashMap<String, Integer> dictionary = new HashMap<>();
+		HashMap<Integer, String> inverseDic = new HashMap<>();
+		
+		for(int i = 0; i < 256; i++){	//
+			String str = i+"";			//Initialized dictionary with all initial possible options
+			dictionary.put(str, i);		//
+			inverseDic.put(i, str);		//
+		}								//
+		///////////////////////////////////
 
 		InputStream training_values = new FileInputStream(file);
 		int[][] current_frame = new int[width][height];
 
 		for (int f=0; f < num_frames; f++) {
-			System.out.println("Training frame difference " + f);
+			System.out.println("Adding difference to dictionary for frame" + f);
 			int[][] prior_frame = current_frame;
 			current_frame = readFrame(training_values, width, height);
-
 			int[][] diff_frame = frameDifference(prior_frame, current_frame);
-			trainModelWithFrame(model, diff_frame);
+			
+			addtoDictionary(dictionary, inverseDic, diff_frame);		//create dictionary here
 		}
+		System.out.println("size of HashMap " + dictionary.size());
+		int max = findMaxBit(dictionary); //get the max bit that will show up in values
 		training_values.close();		
 
-		//		HuffmanEncoder encoder = new HuffmanEncoder(model, model.getCountTotal());
-		//		Map<Symbol, String> code_map = encoder.getCodeMap();
+		
+		
+		
+		LwzEncoder encoder = new LwzEncoder(dictionary, max);  //encoder object
 
-		SymbolEncoder encoder = new ArithmeticEncoder(model);
-
-		Symbol[] symbols = new Unsigned8BitSymbol[256];
-		for (int v=0; v<256; v++) {
-			SymbolModel s = model.getByIndex(v);
-			Symbol sym = s.getSymbol();
-			symbols[v] = sym;
-
-			long prob = s.getProbability(model.getCountTotal());
-			System.out.println("Symbol: " + sym + " probability: " + prob + "/" + model.getCountTotal());
-		}			
-
+		
 		InputStream message = new FileInputStream(file);
 
-		File out_file = new File("/Users/kmp/tmp/" + base + "-compressed.dat");
+		File out_file = new File("/Users/alexj_000/tmp/" + base + "-compressed.dat");
 		OutputStream out_stream = new FileOutputStream(out_file);
 		BitSink bit_sink = new OutputStreamBitSink(out_stream);
 
@@ -80,7 +86,7 @@ public class VideoApp {
 			current_frame = readFrame(message, width, height);
 
 			int[][] diff_frame = frameDifference(prior_frame, current_frame);
-			encodeFrameDifference(diff_frame, encoder, bit_sink, symbols);
+			encodeFrameDifference(diff_frame, encoder, bit_sink);	//encode this frame
 		}
 
 		message.close();
@@ -88,17 +94,16 @@ public class VideoApp {
 		out_stream.close();
 
 		BitSource bit_source = new InputStreamBitSource(new FileInputStream(out_file));
-		OutputStream decoded_file = new FileOutputStream(new File("/Users/kmp/tmp/" + base + "-decoded.dat"));
+		OutputStream decoded_file = new FileOutputStream(new File("/Users/alexj_000/tmp/" + base + "-decoded.dat"));
 
-		//		SymbolDecoder decoder = new HuffmanDecoder(encoder.getCodeMap());
-		SymbolDecoder decoder = new ArithmeticDecoder(model);
+		LwzDecoder decoder = new LwzDecoder(dictionary, inverseDic, max);
 
 		current_frame = new int[width][height];
 
 		for (int f=0; f<num_frames; f++) {
 			System.out.println("Decoding frame " + f);
 			int[][] prior_frame = current_frame;
-			int[][] diff_frame = decodeFrame(decoder, bit_source, width, height);
+			int[][] diff_frame = decodeFrame(decoder, bit_source, width, height);	//decode this frame
 			current_frame = reconstructFrame(prior_frame, diff_frame);
 			outputFrame(current_frame, decoded_file);
 		}
@@ -107,6 +112,115 @@ public class VideoApp {
 
 	}
 
+
+	///////////////////////////////////////////////////////////////////////////////////
+	////////////////////This method will create the dictionary by looking at a frame///
+	
+	private static void addtoDictionary(HashMap dictionary, HashMap inverseDic, int[][] frame) {
+		int width = frame.length;
+		int height = frame[0].length;
+		
+		String str = "";
+		String test;
+		
+		for (int y=0; y<height; y++) {
+			for (int x=0; x<width; x++) {
+				int i = frame[x][y];
+				String pix = "" + i;
+				
+				if(str.equals("")){
+					test = pix;
+				} else {
+					test = str + " " + pix;
+				}
+				
+				
+				if(dictionary.containsKey(test)){
+					str = test;
+				} else {
+					dictionary.put(test, dictSize++);
+					inverseDic.put(dictSize - 1, test);
+					str = pix;
+				}
+				
+				
+			}
+		}
+	}
+
+	////////////////////////////////////////////////////////////////////////
+	////////////Calls encode on ecoder object//////////////////////////////
+	
+	private static void encodeFrameDifference(int[][] frame, LwzEncoder encoder, BitSink bit_sink) 
+			throws IOException {
+	
+		
+		encoder.encode(frame, bit_sink);
+	}
+	
+	
+	
+	////////////////////////////////////////////////////////////////////////
+	////////////////////reads compressed file to get back diff frame////////
+
+	private static int[][] decodeFrame(LwzDecoder decoder, BitSource bit_source, int width, int height) 
+			throws InsufficientBitsLeftException, IOException {
+		
+		int[][] frame = new int[width][height];
+		int [] pixelParts = new int[width*height];
+		
+
+		pixelParts = decoder.decode(decoder,  bit_source,  width,  height);
+		int i = 0;
+		for (int x = 0; x<width;x++){
+			for(int y = 0; y < height; y++){
+				frame[x][y] = pixelParts[i];
+				i++;
+			}
+		}
+		
+		//TODO make 360000 into 850 by whatever array and return;
+		
+		return frame;
+	}
+	
+	
+	
+	/////finds size of hashmap//////
+	
+	public static int findMaxBit(HashMap d){
+		return d.size();
+	}
+	
+	
+	
+	//////////given code///////////////////////
+	///////////////////////////////////////////
+	
+	private static int[][] reconstructFrame(int[][] prior_frame, int[][] frame_difference) {
+		int width = prior_frame.length;
+		int height = prior_frame[0].length;
+
+		int[][] frame = new int[width][height];
+		for (int y=0; y<height; y++) {
+			for (int x=0; x<width; x++) {
+				frame[x][y] = (prior_frame[x][y] + frame_difference[x][y])%256;
+			}
+		}
+		return frame;
+	}
+
+	private static void outputFrame(int[][] frame, OutputStream out) 
+			throws IOException {
+		int width = frame.length;
+		int height = frame[0].length;
+		for (int y=0; y<height; y++) {
+			for (int x=0; x<width; x++) {
+				out.write(frame[x][y]);
+			}
+		}
+	}
+	
 	private static int[][] readFrame(InputStream src, int width, int height) 
 			throws IOException {
 		int[][] frame_data = new int[width][height];
@@ -132,61 +246,5 @@ public class VideoApp {
 		return difference_frame;
 	}
 
-	private static void trainModelWithFrame(Unsigned8BitModel model, int[][] frame) {
-		int width = frame.length;
-		int height = frame[0].length;
-		for (int y=0; y<height; y++) {
-			for (int x=0; x<width; x++) {
-				model.train(frame[x][y]);
-			}
-		}
-	}
-
-	private static void encodeFrameDifference(int[][] frame, SymbolEncoder encoder, BitSink bit_sink, Symbol[] symbols) 
-			throws IOException {
-
-		int width = frame.length;
-		int height = frame[0].length;
-
-		for (int y=0; y<height; y++) {
-			for (int x=0; x<width; x++) {
-				encoder.encode(symbols[frame[x][y]], bit_sink);
-			}
-		}
-	}
-
-	private static int[][] decodeFrame(SymbolDecoder decoder, BitSource bit_source, int width, int height) 
-			throws InsufficientBitsLeftException, IOException {
-		int[][] frame = new int[width][height];
-		for (int y=0; y<height; y++) {
-			for (int x=0; x<width; x++) {
-				frame[x][y] = ((Unsigned8BitSymbol) decoder.decode(bit_source)).getValue();
-			}
-		}
-		return frame;
-	}
-
-	private static int[][] reconstructFrame(int[][] prior_frame, int[][] frame_difference) {
-		int width = prior_frame.length;
-		int height = prior_frame[0].length;
-
-		int[][] frame = new int[width][height];
-		for (int y=0; y<height; y++) {
-			for (int x=0; x<width; x++) {
-				frame[x][y] = (prior_frame[x][y] + frame_difference[x][y])%256;
-			}
-		}
-		return frame;
-	}
-
-	private static void outputFrame(int[][] frame, OutputStream out) 
-			throws IOException {
-		int width = frame.length;
-		int height = frame[0].length;
-		for (int y=0; y<height; y++) {
-			for (int x=0; x<width; x++) {
-				out.write(frame[x][y]);
-			}
-		}
-	}
-}
+	
+} 

@@ -8,6 +8,7 @@ public class OutputStreamBitSink implements BitSink {
 	OutputStream _stream;
 	int _buffer;
 	int _available;
+	String binaryRep;
 	
 	public OutputStreamBitSink(OutputStream stream) {
 		_stream = stream;
@@ -24,6 +25,8 @@ public class OutputStreamBitSink implements BitSink {
 		if (length <= _available) {
 			_buffer <<= length;
 			_buffer |= (bits & (~(0xffffffff << length)));
+			//binaryRep = Integer.toBinaryString(_buffer);
+			//System.out.println(binaryRep);
 			_available -= length;
 			
 			if (_available == 0) {
